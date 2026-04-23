@@ -1,24 +1,7 @@
 import type { CaptureMode } from "../shared/types";
 
-type BackgroundRequest =
-  | {
-      target: "background";
-      type: "START_CAPTURE";
-      mode: CaptureMode;
-    }
-  | {
-      target: "background";
-      type: "CROP_IMAGE";
-      imageDataUrl: string;
-      rect: { x: number; y: number; width: number; height: number };
-    }
-  | {
-      target: "background";
-      type: "EXPORT_IMAGE";
-      imageDataUrl: string;
-      annotations: unknown[];
-      copyToClipboard?: boolean;
-    };
+const MENU_VISIBLE_ID = "snapweave-visible";
+const MENU_FULL_PAGE_ID = "snapweave-full-page";
 
 type TabPageMetrics = {
   viewportWidth: number;
@@ -31,18 +14,45 @@ type TabPageMetrics = {
 };
 
 let creatingOffscreen: Promise<void> | null = null;
+let offscreenReadyResolve: (() => void) | null = null;
+let offscreenReady: Promise<void> | null = null;
 
 const OFFSCREEN_PATH = "offscreen.html";
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const createRequestId = () => `${Date.now()}-${crypto.randomUUID()}`;
 
+const isCaptureableUrl = (url?: string) =>
+  Boolean(
+    url &&
+      !url.startsWith("chrome://") &&
+      !url.startsWith("chrome-extension://") &&
+      !url.startsWith("devtools://")
+  );
+
 const getActiveTab = async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || typeof tab.windowId !== "number") {
-    throw new Error("No active tab found.");
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const activeTab = tabs.find((tab) => tab.active);
+
+  if (activeTab?.id && typeof activeTab.windowId === "number" && isCaptureableUrl(activeTab.url)) {
+    return activeTab as chrome.tabs.Tab & { id: number; windowId: number };
   }
+
+  const fallbackTab = tabs
+    .filter((tab) => tab.id && typeof tab.windowId === "number" && isCaptureableUrl(tab.url))
+    .sort((left, right) => (right.lastAccessed ?? 0) - (left.lastAccessed ?? 0))[0];
+
+  if (!fallbackTab?.id || typeof fallbackTab.windowId !== "number") {
+    throw new Error("未找到可截图的网页标签页。");
+  }
+
+  return fallbackTab as chrome.tabs.Tab & { id: number; windowId: number };
+};
+
+const assertActionTab = (tab?: chrome.tabs.Tab) => {
+  if (!tab?.id || typeof tab.windowId !== "number") {
+    throw new Error("当前标签页不可用。");
+  }
+
   return tab as chrome.tabs.Tab & { id: number; windowId: number };
 };
 
@@ -56,6 +66,22 @@ const ensureContentScript = async (tabId: number) => {
 const sendMessageToTab = async <T>(tabId: number, message: unknown): Promise<T> =>
   chrome.tabs.sendMessage(tabId, message) as Promise<T>;
 
+const createContextMenus = async () => {
+  await chrome.contextMenus.removeAll();
+
+  chrome.contextMenus.create({
+    id: MENU_VISIBLE_ID,
+    title: "截取本页",
+    contexts: ["action"]
+  });
+
+  chrome.contextMenus.create({
+    id: MENU_FULL_PAGE_ID,
+    title: "截取全页",
+    contexts: ["action"]
+  });
+};
+
 const ensureOffscreenDocument = async () => {
   const url = chrome.runtime.getURL(OFFSCREEN_PATH);
   const contexts = await chrome.runtime.getContexts({
@@ -68,16 +94,27 @@ const ensureOffscreenDocument = async () => {
   }
 
   if (!creatingOffscreen) {
+    offscreenReady = new Promise<void>((resolve) => {
+      offscreenReadyResolve = resolve;
+    });
     creatingOffscreen = chrome.offscreen.createDocument({
       url: OFFSCREEN_PATH,
       reasons: ["BLOBS", "CLIPBOARD"],
-      justification: "Compose screenshots, crop captures, and write image data to the clipboard."
+      justification: "用于处理截图裁剪、整页拼接和写入剪贴板。"
     }).finally(() => {
       creatingOffscreen = null;
     });
   }
 
   await creatingOffscreen;
+
+  if (offscreenReady) {
+    const ready = offscreenReady;
+    const timeout = new Promise<void>((_, reject) =>
+      setTimeout(() => reject(new Error("offscreen ready timeout")), 5000)
+    );
+    await Promise.race([ready, timeout]);
+  }
 };
 
 const sendOffscreenMessage = async <T>(message: Record<string, unknown>) => {
@@ -98,7 +135,7 @@ const cropImage = async (imageDataUrl: string, rect: { x: number; y: number; wid
   });
 
   if (!response.ok || !response.dataUrl) {
-    throw new Error(response.error ?? "Crop failed.");
+    throw new Error(response.error ?? "裁剪截图失败。");
   }
 
   return response.dataUrl;
@@ -119,7 +156,7 @@ const exportImage = async (
   });
 
   if (!response.ok || !response.dataUrl) {
-    throw new Error(response.error ?? "Export failed.");
+    throw new Error(response.error ?? "导出截图失败。");
   }
 
   return response.dataUrl;
@@ -140,7 +177,7 @@ const stitchFrames = async (
   });
 
   if (!response.ok || !response.dataUrl) {
-    throw new Error(response.error ?? "Stitching failed.");
+    throw new Error(response.error ?? "整页拼接失败。");
   }
 
   return response.dataUrl;
@@ -148,10 +185,16 @@ const stitchFrames = async (
 
 const buildScrollStops = (metrics: TabPageMetrics) => {
   const stops: Array<{ x: number; y: number }> = [];
+  const maxX = Math.max(0, metrics.pageWidth - metrics.viewportWidth);
   const maxY = Math.max(0, metrics.pageHeight - metrics.viewportHeight);
 
   for (let y = 0; y <= maxY; y += metrics.viewportHeight) {
-    stops.push({ x: 0, y: Math.min(y, maxY) });
+    for (let x = 0; x <= maxX; x += metrics.viewportWidth) {
+      stops.push({
+        x: Math.min(x, maxX),
+        y: Math.min(y, maxY)
+      });
+    }
   }
 
   if (stops.length === 0) {
@@ -176,16 +219,27 @@ const startFullPageCapture = async (tab: chrome.tabs.Tab & { id: number; windowI
   try {
     const frames: Array<{ dataUrl: string; x: number; y: number }> = [];
     const stops = buildScrollStops(metrics);
+    const CAPTURE_INTERVAL_MS = 600;
+    let lastCaptureAt = 0;
 
-    for (const stop of stops) {
+    for (let index = 0; index < stops.length; index += 1) {
+      const stop = stops[index];
       await sendMessageToTab(tab.id, {
         target: "content",
         type: "SCROLL_TO_POSITION",
         x: stop.x,
         y: stop.y
       });
-      await delay(160);
+
+      // chrome.tabs.captureVisibleTab has a ~2/sec quota. Space calls apart
+      // so the browser doesn't silently return the previous frame.
+      const elapsed = Date.now() - lastCaptureAt;
+      if (index > 0 && elapsed < CAPTURE_INTERVAL_MS) {
+        await new Promise((resolve) => setTimeout(resolve, CAPTURE_INTERVAL_MS - elapsed));
+      }
+
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+      lastCaptureAt = Date.now();
       frames.push({
         dataUrl,
         x: stop.x,
@@ -210,9 +264,10 @@ const startFullPageCapture = async (tab: chrome.tabs.Tab & { id: number; windowI
   }
 };
 
-const startCapture = async (mode: CaptureMode) => {
-  const tab = await getActiveTab();
-
+const startCaptureForTab = async (
+  tab: chrome.tabs.Tab & { id: number; windowId: number },
+  mode: CaptureMode
+) => {
   if (mode === "fullPage") {
     await startFullPageCapture(tab);
     return;
@@ -228,10 +283,46 @@ const startCapture = async (mode: CaptureMode) => {
   });
 };
 
+const startCapture = async (mode: CaptureMode) => {
+  const tab = await getActiveTab();
+  await startCaptureForTab(tab, mode);
+};
+
 chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.set({
     preferredMode: "selection"
   });
+  await createContextMenus();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void createContextMenus();
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  void startCaptureForTab(assertActionTab(tab), "selection").catch((error) => {
+    console.error(error);
+  });
+});
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (!tab) {
+    return;
+  }
+
+  const actionTab = assertActionTab(tab);
+
+  if (info.menuItemId === MENU_VISIBLE_ID) {
+    void startCaptureForTab(actionTab, "visible").catch((error) => {
+      console.error(error);
+    });
+  }
+
+  if (info.menuItemId === MENU_FULL_PAGE_ID) {
+    void startCaptureForTab(actionTab, "fullPage").catch((error) => {
+      console.error(error);
+    });
+  }
 });
 
 chrome.commands.onCommand.addListener((command) => {
@@ -244,8 +335,17 @@ chrome.commands.onCommand.addListener((command) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((message: BackgroundRequest, _sender, sendResponse) => {
-  if (message.target !== "background") {
+chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+  if (message?.type === "OFFSCREEN_READY") {
+    if (offscreenReadyResolve) {
+      offscreenReadyResolve();
+      offscreenReadyResolve = null;
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.target !== "background") {
     return;
   }
 
@@ -265,7 +365,7 @@ chrome.runtime.onMessage.addListener((message: BackgroundRequest, _sender, sendR
           dataUrl: await exportImage(message.imageDataUrl, message.annotations, message.copyToClipboard)
         };
       default:
-        throw new Error("Unknown background request.");
+        throw new Error("未知的后台请求。");
     }
   };
 
@@ -274,9 +374,10 @@ chrome.runtime.onMessage.addListener((message: BackgroundRequest, _sender, sendR
       sendResponse(response);
     })
     .catch((error) => {
+      console.error("[SnapWeave bg] responding error", message.type, error);
       sendResponse({
         ok: false,
-        error: error instanceof Error ? error.message : "Unexpected background error."
+        error: error instanceof Error ? error.message : "后台处理失败。"
       });
     });
 

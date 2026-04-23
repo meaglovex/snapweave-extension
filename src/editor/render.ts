@@ -22,28 +22,31 @@ const renderRect = (ctx: CanvasRenderingContext2D, annotation: RectAnnotation) =
 
 const renderArrow = (ctx: CanvasRenderingContext2D, annotation: ArrowAnnotation) => {
   const { from, to, style } = annotation;
-  const angle = Math.atan2(to.y - from.y, to.x - from.x);
-  const headLength = Math.max(10, style.lineWidth * 3);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) {
+    return;
+  }
+
+  const angle = Math.atan2(dy, dx);
+  const shaft = style.lineWidth;
+  const headWidth = shaft * 3;
+  const headLength = Math.min(length, Math.max(shaft * 3.2, 14));
+  const shaftEnd = length - headLength;
 
   ctx.save();
-  ctx.strokeStyle = style.color;
+  ctx.translate(from.x, from.y);
+  ctx.rotate(angle);
   ctx.fillStyle = style.color;
-  ctx.lineWidth = style.lineWidth;
   ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.lineTo(to.x, to.y);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(to.x, to.y);
-  ctx.lineTo(
-    to.x - headLength * Math.cos(angle - Math.PI / 6),
-    to.y - headLength * Math.sin(angle - Math.PI / 6)
-  );
-  ctx.lineTo(
-    to.x - headLength * Math.cos(angle + Math.PI / 6),
-    to.y - headLength * Math.sin(angle + Math.PI / 6)
-  );
+  ctx.moveTo(0, -shaft / 2);
+  ctx.lineTo(shaftEnd, -shaft / 2);
+  ctx.lineTo(shaftEnd, -headWidth / 2);
+  ctx.lineTo(length, 0);
+  ctx.lineTo(shaftEnd, headWidth / 2);
+  ctx.lineTo(shaftEnd, shaft / 2);
+  ctx.lineTo(0, shaft / 2);
   ctx.closePath();
   ctx.fill();
   ctx.restore();

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SnapWeave",
-  "version": "0.1.0",
-  "description": "WeChat-style page capture and annotation for Chrome.",
+  "name": "网页截图",
+  "version": "0.2.0",
+  "description": "像微信截图一样进行网页截图、标注、复制和下载。",
   "minimum_chrome_version": "109",
   "permissions": [
     "activeTab",
@@ -10,15 +10,15 @@
     "tabs",
     "storage",
     "offscreen",
-    "clipboardWrite"
+    "clipboardWrite",
+    "contextMenus"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "SnapWeave",
-    "default_popup": "popup.html",
+    "default_title": "网页截图",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -26,6 +26,7 @@
       "128": "icons/icon-128.png"
     }
   },
+  "options_page": "popup.html",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -38,7 +39,7 @@
         "default": "Ctrl+Shift+S",
         "mac": "Command+Shift+S"
       },
-      "description": "Start region capture on the current page"
+      "description": "开始框选截图"
     }
   },
   "web_accessible_resources": [

@@ -27,11 +27,9 @@ type OffscreenRequest =
     };
 
 const loadImage = async (dataUrl: string) => {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = dataUrl;
-  await image.decode();
-  return image;
+  const blob = await (await fetch(dataUrl)).blob();
+  const bitmap = await createImageBitmap(blob);
+  return bitmap;
 };
 
 const rectToCanvas = (rect: Rect) => ({
@@ -57,27 +55,30 @@ const drawAnnotation = async (
       ctx.restore();
       return;
     case "arrow": {
-      const angle = Math.atan2(annotation.to.y - annotation.from.y, annotation.to.x - annotation.from.x);
-      const headLength = Math.max(10, annotation.style.lineWidth * 3);
+      const dx = annotation.to.x - annotation.from.x;
+      const dy = annotation.to.y - annotation.from.y;
+      const length = Math.hypot(dx, dy);
+      if (length < 1) {
+        return;
+      }
+      const angle = Math.atan2(dy, dx);
+      const shaft = annotation.style.lineWidth;
+      const headWidth = shaft * 3;
+      const headLength = Math.min(length, Math.max(shaft * 3.2, 14));
+      const shaftEnd = length - headLength;
 
       ctx.save();
-      ctx.strokeStyle = annotation.style.color;
+      ctx.translate(annotation.from.x, annotation.from.y);
+      ctx.rotate(angle);
       ctx.fillStyle = annotation.style.color;
-      ctx.lineWidth = annotation.style.lineWidth;
       ctx.beginPath();
-      ctx.moveTo(annotation.from.x, annotation.from.y);
-      ctx.lineTo(annotation.to.x, annotation.to.y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(annotation.to.x, annotation.to.y);
-      ctx.lineTo(
-        annotation.to.x - headLength * Math.cos(angle - Math.PI / 6),
-        annotation.to.y - headLength * Math.sin(angle - Math.PI / 6)
-      );
-      ctx.lineTo(
-        annotation.to.x - headLength * Math.cos(angle + Math.PI / 6),
-        annotation.to.y - headLength * Math.sin(angle + Math.PI / 6)
-      );
+      ctx.moveTo(0, -shaft / 2);
+      ctx.lineTo(shaftEnd, -shaft / 2);
+      ctx.lineTo(shaftEnd, -headWidth / 2);
+      ctx.lineTo(length, 0);
+      ctx.lineTo(shaftEnd, headWidth / 2);
+      ctx.lineTo(shaftEnd, shaft / 2);
+      ctx.lineTo(0, shaft / 2);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -135,16 +136,6 @@ const drawAnnotation = async (
   }
 };
 
-const copyToClipboard = async (dataUrl: string) => {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-  await navigator.clipboard.write([
-    new ClipboardItem({
-      [blob.type]: blob
-    })
-  ]);
-};
-
 const cropImage = async (message: Extract<OffscreenRequest, { type: "CROP_IMAGE" }>) => {
   const image = await loadImage(message.imageDataUrl);
   const rect = rectToCanvas(message.rect);
@@ -154,7 +145,7 @@ const cropImage = async (message: Extract<OffscreenRequest, { type: "CROP_IMAGE"
   const ctx = canvas.getContext("2d");
 
   if (!ctx) {
-    throw new Error("Failed to get crop context.");
+    throw new Error("裁剪画布初始化失败。");
   }
 
   ctx.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height);
@@ -168,7 +159,7 @@ const stitchFrames = async (message: Extract<OffscreenRequest, { type: "STITCH_F
   const ctx = canvas.getContext("2d");
 
   if (!ctx) {
-    throw new Error("Failed to get stitch context.");
+    throw new Error("整页拼接画布初始化失败。");
   }
 
   for (const frame of message.frames) {
@@ -186,12 +177,12 @@ const stitchFrames = async (message: Extract<OffscreenRequest, { type: "STITCH_F
 const exportImage = async (message: Extract<OffscreenRequest, { type: "EXPORT_IMAGE" }>) => {
   const image = await loadImage(message.imageDataUrl);
   const canvas = document.createElement("canvas");
-  canvas.width = image.naturalWidth;
-  canvas.height = image.naturalHeight;
+  canvas.width = image.width;
+  canvas.height = image.height;
   const ctx = canvas.getContext("2d");
 
   if (!ctx) {
-    throw new Error("Failed to get export context.");
+    throw new Error("导出画布初始化失败。");
   }
 
   ctx.drawImage(image, 0, 0);
@@ -201,11 +192,7 @@ const exportImage = async (message: Extract<OffscreenRequest, { type: "EXPORT_IM
   }
 
   const dataUrl = canvasToPng(canvas);
-
-  if (message.copyToClipboard) {
-    await copyToClipboard(dataUrl);
-  }
-
+  // Clipboard write is delegated to the content script (focused doc) — see content/index.ts.
   return dataUrl;
 };
 
@@ -223,7 +210,7 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
       case "EXPORT_IMAGE":
         return exportImage(message);
       default:
-        throw new Error("Unknown offscreen request.");
+        throw new Error("未知的离屏处理请求。");
     }
   };
 
@@ -236,12 +223,17 @@ chrome.runtime.onMessage.addListener((message: OffscreenRequest, _sender, sendRe
       });
     })
     .catch((error) => {
+      console.error("[SnapWeave offscreen] responding error", message.type, error);
       sendResponse({
         ok: false,
         requestId: message.requestId,
-        error: error instanceof Error ? error.message : "Offscreen operation failed."
+        error: error instanceof Error ? error.message : "离屏处理失败。"
       });
     });
 
   return true;
+});
+
+chrome.runtime.sendMessage({ type: "OFFSCREEN_READY" }).catch(() => {
+  // background may not be listening yet; it will ensure it exists when querying
 });

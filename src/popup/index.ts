@@ -19,12 +19,12 @@ const startCapture = async (mode: CaptureMode) => {
     });
 
     if (!response?.ok) {
-      throw new Error(response?.error ?? "Capture failed.");
+      throw new Error(response?.error ?? "启动截图失败。");
     }
 
     window.close();
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "Unable to start capture.");
+    setStatus(error instanceof Error ? error.message : "启动截图失败。");
   }
 };
 

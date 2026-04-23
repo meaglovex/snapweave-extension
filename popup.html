@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SnapWeave</title>
+    <title>网页截图</title>
     <style>
       :root {
         color-scheme: light;
@@ -96,29 +96,29 @@
   <body>
     <main class="shell">
       <section class="brand">
-        <img src="/icons/icon-48.png" alt="SnapWeave" />
+        <img src="/icons/icon-48.png" alt="网页截图" />
         <div>
-          <h1>SnapWeave</h1>
-          <p>Capture, mark up, copy, and ship.</p>
+          <h1>网页截图</h1>
+          <p>截图、标注、复制、下载，一步完成。</p>
         </div>
       </section>
 
       <section class="mode-grid">
         <button class="mode-button" data-mode="selection">
-          <strong>Region Capture</strong>
-          <span>WeChat-style selection overlay with editing tools.</span>
+          <strong>框选截图</strong>
+          <span>像微信截图一样先框选，再决定编辑、复制或下载。</span>
         </button>
         <button class="mode-button" data-mode="visible">
-          <strong>Visible Area</strong>
-          <span>Capture the current viewport and annotate immediately.</span>
+          <strong>截取本页</strong>
+          <span>直接截取当前可见区域，带编辑和保存到粘贴板。</span>
         </button>
         <button class="mode-button" data-mode="fullPage">
-          <strong>Full Page</strong>
-          <span>Scroll, stitch, and export long pages as one PNG.</span>
+          <strong>截取全页</strong>
+          <span>自动滚动拼接整页，并导出为一张 PNG。</span>
         </button>
       </section>
 
-      <p class="footer">Shortcut: <code>Ctrl/Command + Shift + S</code></p>
+      <p class="footer">快捷键：<code>Ctrl/Command + Shift + S</code></p>
       <div id="status" class="status" aria-live="polite"></div>
     </main>
     <script type="module" src="/src/popup/index.ts"></script>

@@ -19,14 +19,14 @@ type RuntimeMessage =
 
 const TOOL_ORDER: AnnotationKind[] = ["rect", "arrow", "brush", "text", "mosaic"];
 const TOOL_LABELS: Record<AnnotationKind, string> = {
-  rect: "Rectangle",
-  arrow: "Arrow",
-  brush: "Brush",
-  text: "Text",
-  mosaic: "Mosaic"
+  rect: "矩形",
+  arrow: "箭头",
+  brush: "画笔",
+  text: "文字",
+  mosaic: "马赛克"
 };
 const COLORS = ["#ef4444", "#2563eb", "#10b981", "#f59e0b", "#ffffff"];
-const LINE_WIDTHS = [2, 4, 6];
+const LINE_WIDTHS = [10, 20, 30];
 
 const STYLE_TEXT = `
   :host {
@@ -44,6 +44,7 @@ const STYLE_TEXT = `
   .sw-backdrop {
     position: absolute;
     inset: 0;
+    z-index: 0;
     background: rgba(2, 6, 23, 0.72);
     backdrop-filter: blur(2px);
   }
@@ -51,8 +52,10 @@ const STYLE_TEXT = `
   .sw-image-frame {
     position: absolute;
     inset: 0;
+    z-index: 1;
     display: block;
     overflow: hidden;
+    pointer-events: none;
   }
 
   .sw-image-frame img,
@@ -61,11 +64,20 @@ const STYLE_TEXT = `
     transform-origin: top left;
   }
 
+  .sw-image-frame img {
+    pointer-events: none;
+  }
+
+  .sw-image-frame canvas {
+    pointer-events: auto;
+  }
+
   .sw-selection-box {
     position: absolute;
     border: 2px solid #38bdf8;
     box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.54);
     display: none;
+    pointer-events: none;
   }
 
   .sw-toolbar,
@@ -83,24 +95,29 @@ const STYLE_TEXT = `
   }
 
   .sw-banner {
+    z-index: 3;
     top: 20px;
     left: 50%;
     transform: translateX(-50%);
     font-size: 13px;
     color: #cbd5e1;
+    pointer-events: none;
   }
 
   .sw-toolbar {
+    z-index: 4;
     left: 50%;
     bottom: 28px;
     transform: translateX(-50%);
     flex-wrap: wrap;
     max-width: calc(100vw - 32px);
+    pointer-events: auto;
   }
 
   .sw-actions {
-    right: 28px;
-    top: 28px;
+    z-index: 4;
+    gap: 6px;
+    pointer-events: auto;
   }
 
   .sw-button,
@@ -113,6 +130,10 @@ const STYLE_TEXT = `
     cursor: pointer;
     font-size: 12px;
     transition: background 0.18s ease, transform 0.18s ease;
+  }
+
+  .sw-button-primary {
+    background: linear-gradient(135deg, #22d3ee 0%, #2563eb 100%);
   }
 
   .sw-button:hover,
@@ -151,8 +172,13 @@ const STYLE_TEXT = `
     white-space: nowrap;
   }
 
+  .sw-actions .sw-meta {
+    margin-right: 4px;
+  }
+
   .sw-toast {
     position: absolute;
+    z-index: 5;
     left: 50%;
     top: 84px;
     transform: translateX(-50%);
@@ -163,6 +189,7 @@ const STYLE_TEXT = `
     font-size: 12px;
     opacity: 0;
     transition: opacity 0.18s ease;
+    pointer-events: none;
   }
 
   .sw-toast.visible {
@@ -235,6 +262,10 @@ class SnapWeaveOverlay {
 
   private isPointerDown = false;
 
+  private activePointerId: number | null = null;
+
+  private activeInputSource: "pointer" | "mouse" | null = null;
+
   private dragStart: Point | null = null;
 
   private draftAnnotation: Annotation | null = null;
@@ -250,6 +281,10 @@ class SnapWeaveOverlay {
   private activeLineWidth = LINE_WIDTHS[1];
 
   private hiddenElements: HTMLElement[] = [];
+
+  private originalDocumentScrollBehavior: string | null = null;
+
+  private originalBodyScrollBehavior: string | null = null;
 
   private toastTimer: number | null = null;
 
@@ -268,7 +303,7 @@ class SnapWeaveOverlay {
 
     this.banner = document.createElement("div");
     this.banner.className = "sw-banner";
-    this.banner.textContent = "SnapWeave ready. Drag to select or annotate.";
+    this.banner.textContent = "拖动鼠标框选截图区域。";
 
     this.frame = document.createElement("div");
     this.frame.className = "sw-image-frame";
@@ -292,19 +327,30 @@ class SnapWeaveOverlay {
     this.meta = document.createElement("span");
     this.meta.className = "sw-meta";
 
-    this.undoButton = this.createButton("Undo", () => this.undo());
-    this.redoButton = this.createButton("Redo", () => this.redo());
-    this.copyButton = this.createButton("Copy", () => {
+    this.undoButton = this.createButton("撤销", () => this.undo());
+    this.redoButton = this.createButton("重做", () => this.redo());
+    this.copyButton = this.createButton("保存到粘贴板", () => {
+      if (this.stage === "selection") {
+        void this.handleSelectionExport(true);
+        return;
+      }
+
       void this.handleExport(true);
     });
-    this.downloadButton = this.createButton("Download", () => {
+    this.copyButton.classList.add("sw-button-primary");
+    this.downloadButton = this.createButton("下载 PNG", () => {
+      if (this.stage === "selection") {
+        void this.handleSelectionExport(false);
+        return;
+      }
+
       void this.handleExport(false);
     });
-    this.editSelectionButton = this.createButton("Edit Selection", () => {
+    this.editSelectionButton = this.createButton("编辑", () => {
       void this.enterEditorFromSelection();
     });
 
-    const closeButton = this.createButton("Cancel", () => this.close());
+    const closeButton = this.createButton("取消", () => this.close());
     this.actions.append(this.meta, this.editSelectionButton, this.undoButton, this.redoButton, this.copyButton, this.downloadButton, closeButton);
 
     shell.append(this.backdrop, this.frame, this.banner, this.toolbar, this.actions, this.toast);
@@ -336,17 +382,17 @@ class SnapWeaveOverlay {
 
       if (mode === "selection") {
         this.stage = "selection";
-        this.banner.textContent = "Drag to select a region. Press Enter to continue, Esc to cancel.";
+        this.banner.textContent = "拖动鼠标框选，松手后可编辑、复制或下载。按 Esc 取消。";
       } else {
         this.stage = "editor";
-        this.banner.textContent = "Annotate the capture, then copy or download it.";
+        this.banner.textContent = "标注完成后可保存到粘贴板或下载。";
       }
 
       this.updateLayout();
       this.updateButtons();
       void this.renderEditorCanvas();
     }).catch(() => {
-      this.showToast("Failed to load screenshot.");
+      this.showToast("截图加载失败。");
       this.close();
     });
   }
@@ -365,6 +411,10 @@ class SnapWeaveOverlay {
 
   prepareFullPageCapture() {
     this.hiddenElements = [];
+    this.originalDocumentScrollBehavior = document.documentElement.style.scrollBehavior;
+    this.originalBodyScrollBehavior = document.body.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = "auto";
+    document.body.style.scrollBehavior = "auto";
     document.querySelectorAll<HTMLElement>("body *").forEach((element) => {
       const position = getComputedStyle(element).position;
       if (position === "fixed" || position === "sticky") {
@@ -381,12 +431,26 @@ class SnapWeaveOverlay {
       delete element.dataset.snapweaveVisibility;
     });
     this.hiddenElements = [];
+    document.documentElement.style.scrollBehavior = this.originalDocumentScrollBehavior ?? "";
+    document.body.style.scrollBehavior = this.originalBodyScrollBehavior ?? "";
+    this.originalDocumentScrollBehavior = null;
+    this.originalBodyScrollBehavior = null;
     window.scrollTo(x, y);
+  }
+
+  async scrollToPosition(x: number, y: number) {
+    window.scrollTo(x, y);
+
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
   }
 
   async cropSelection() {
     if (!this.selectionRect) {
-      throw new Error("No selection available.");
+      throw new Error("还没有可用的选区。");
     }
 
     const response = await chrome.runtime.sendMessage({
@@ -397,7 +461,7 @@ class SnapWeaveOverlay {
     });
 
     if (!response?.ok || !response.dataUrl) {
-      throw new Error(response?.error ?? "Failed to crop selection.");
+      throw new Error(response?.error ?? "裁剪截图失败。");
     }
 
     return response.dataUrl as string;
@@ -405,7 +469,7 @@ class SnapWeaveOverlay {
 
   private enterEditorFromSelection = async () => {
     if (!this.selectionRect) {
-      this.showToast("Draw a selection first.");
+      this.showToast("请先框选截图区域。");
       return;
     }
 
@@ -417,9 +481,60 @@ class SnapWeaveOverlay {
       this.redoStack = [];
       this.openSession("visible", cropped);
     } catch (error) {
-      this.showToast(error instanceof Error ? error.message : "Unable to crop selection.");
+      this.showToast(error instanceof Error ? error.message : "裁剪截图失败。");
     }
   };
+
+  private async handleSelectionExport(copyToClipboard: boolean) {
+    if (!this.hasMeaningfulSelection()) {
+      this.showToast("请先框选截图区域。");
+      return;
+    }
+
+    try {
+      const cropped = await this.cropSelection();
+      const response = await chrome.runtime.sendMessage({
+        target: "background",
+        type: "EXPORT_IMAGE",
+        imageDataUrl: cropped,
+        annotations: [],
+        copyToClipboard
+      });
+
+      if (!response?.ok || !response.dataUrl) {
+        throw new Error(response?.error ?? "导出截图失败。");
+      }
+
+      if (copyToClipboard) {
+        await this.writeImageToClipboard(response.dataUrl as string);
+        this.showToast("已保存到粘贴板。");
+        window.setTimeout(() => this.close(), 320);
+        return;
+      }
+
+      const link = document.createElement("a");
+      link.href = response.dataUrl as string;
+      link.download = this.buildFileName();
+      link.click();
+      this.showToast("截图已下载。");
+      window.setTimeout(() => this.close(), 320);
+    } catch (error) {
+      console.error("[SnapWeave] handleSelectionExport error", error);
+      this.showToast(error instanceof Error ? error.message : "导出截图失败。");
+    }
+  }
+
+  private async writeImageToClipboard(dataUrl: string) {
+    const blob = await (await fetch(dataUrl)).blob();
+    try {
+      window.focus();
+    } catch {
+      // focus may fail in some contexts; ClipboardItem write will surface the real error
+    }
+    await navigator.clipboard.write([
+      new ClipboardItem({ [blob.type]: blob })
+    ]);
+  }
 
   private bindEvents() {
     window.addEventListener("resize", () => {
@@ -432,7 +547,18 @@ class SnapWeaveOverlay {
 
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     this.canvas.addEventListener("pointermove", (event) => this.onPointerMove(event));
-    window.addEventListener("pointerup", (event) => this.onPointerUp(event));
+    this.canvas.addEventListener("pointerup", (event) => this.onPointerUp(event));
+    this.canvas.addEventListener("mousedown", (event) => this.onMouseDown(event));
+    this.canvas.addEventListener("mousemove", (event) => this.onMouseMove(event));
+    window.addEventListener("pointerup", (event) => this.onPointerUp(event), true);
+    window.addEventListener("pointercancel", () => this.finishPointerGesture(), true);
+    window.addEventListener("mouseup", () => this.finishPointerGesture(), true);
+    window.addEventListener("blur", () => this.finishPointerGesture(), true);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") {
+        this.finishPointerGesture();
+      }
+    });
 
     window.addEventListener("keydown", (event) => {
       if (this.stage === "idle") {
@@ -467,6 +593,8 @@ class SnapWeaveOverlay {
       return;
     }
 
+    event.preventDefault();
+
     const point = this.clientToImage(event.clientX, event.clientY);
     if (!point) {
       return;
@@ -474,6 +602,61 @@ class SnapWeaveOverlay {
 
     this.hideTextEditor();
     this.isPointerDown = true;
+    this.activePointerId = event.pointerId;
+    this.activeInputSource = "pointer";
+    this.dragStart = point;
+    try {
+      this.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore capture failures from synthetic or unsupported pointer sources.
+    }
+
+    if (this.stage === "selection") {
+      this.selectionRect = { x: point.x, y: point.y, width: 0, height: 0 };
+      this.updateSelectionBox();
+      return;
+    }
+
+    switch (this.activeTool) {
+      case "rect":
+        this.draftAnnotation = this.makeRectAnnotation(point, point);
+        break;
+      case "arrow":
+        this.draftAnnotation = this.makeArrowAnnotation(point, point);
+        break;
+      case "brush":
+        this.draftAnnotation = this.makeBrushAnnotation([point]);
+        break;
+      case "mosaic":
+        this.draftAnnotation = this.makeMosaicAnnotation(point, point);
+        break;
+      case "text":
+        this.openTextEditor(point, event.clientX, event.clientY);
+        this.finishPointerGesture();
+        return;
+      default:
+        return;
+    }
+
+    void this.renderEditorCanvas();
+  }
+
+  private onMouseDown(event: MouseEvent) {
+    if (event.button !== 0 || this.stage === "idle" || this.activeInputSource === "pointer") {
+      return;
+    }
+
+    event.preventDefault();
+
+    const point = this.clientToImage(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    this.hideTextEditor();
+    this.isPointerDown = true;
+    this.activePointerId = null;
+    this.activeInputSource = "mouse";
     this.dragStart = point;
 
     if (this.stage === "selection") {
@@ -497,8 +680,7 @@ class SnapWeaveOverlay {
         break;
       case "text":
         this.openTextEditor(point, event.clientX, event.clientY);
-        this.isPointerDown = false;
-        this.dragStart = null;
+        this.finishPointerGesture();
         return;
       default:
         return;
@@ -508,7 +690,64 @@ class SnapWeaveOverlay {
   }
 
   private onPointerMove(event: PointerEvent) {
-    if (!this.isPointerDown || !this.dragStart) {
+    if (this.activeInputSource !== "pointer" || !this.isPointerDown || !this.dragStart) {
+      return;
+    }
+
+    if (event.buttons === 0) {
+      this.finishPointerGesture();
+      return;
+    }
+
+    const point = this.clientToImage(event.clientX, event.clientY);
+    if (!point) {
+      return;
+    }
+
+    if (this.stage === "selection" && this.selectionRect) {
+      this.selectionRect = {
+        x: this.dragStart.x,
+        y: this.dragStart.y,
+        width: point.x - this.dragStart.x,
+        height: point.y - this.dragStart.y
+      };
+      this.updateSelectionBox();
+      return;
+    }
+
+    if (!this.draftAnnotation) {
+      return;
+    }
+
+    switch (this.draftAnnotation.type) {
+      case "rect":
+        this.draftAnnotation.rect.width = point.x - this.dragStart.x;
+        this.draftAnnotation.rect.height = point.y - this.dragStart.y;
+        break;
+      case "arrow":
+        this.draftAnnotation.to = point;
+        break;
+      case "brush":
+        this.draftAnnotation.points.push(point);
+        break;
+      case "mosaic":
+        this.draftAnnotation.rect.width = point.x - this.dragStart.x;
+        this.draftAnnotation.rect.height = point.y - this.dragStart.y;
+        break;
+      default:
+        break;
+    }
+
+    void this.renderEditorCanvas();
+  }
+
+  private onMouseMove(event: MouseEvent) {
+    if (this.activeInputSource !== "mouse" || !this.isPointerDown || !this.dragStart) {
+      return;
+    }
+
+    if (event.buttons === 0) {
+      this.finishPointerGesture();
       return;
     }
 
@@ -555,11 +794,29 @@ class SnapWeaveOverlay {
   }
 
   private onPointerUp(_event: PointerEvent) {
+    if (this.activeInputSource !== "pointer") {
+      return;
+    }
+
+    this.finishPointerGesture();
+  }
+
+  private finishPointerGesture() {
     if (!this.isPointerDown) {
       return;
     }
 
+    if (this.activePointerId !== null) {
+      try {
+        this.canvas.releasePointerCapture(this.activePointerId);
+      } catch {
+        // Ignore capture release failures when the pointer was not captured.
+      }
+    }
+
     this.isPointerDown = false;
+    this.activePointerId = null;
+    this.activeInputSource = null;
     this.dragStart = null;
 
     if (this.stage === "selection") {
@@ -599,10 +856,11 @@ class SnapWeaveOverlay {
 
     TOOL_ORDER.forEach((tool) => {
       const button = document.createElement("button");
+      button.type = "button";
       button.className = "sw-tool";
       button.textContent = TOOL_LABELS[tool];
       button.setAttribute("aria-pressed", String(this.activeTool === tool));
-      button.addEventListener("click", () => {
+      this.bindPress(button, () => {
         this.activeTool = tool;
         this.renderToolbar();
       });
@@ -611,10 +869,11 @@ class SnapWeaveOverlay {
 
     COLORS.forEach((color) => {
       const button = document.createElement("button");
+      button.type = "button";
       button.className = "sw-color";
       button.style.background = color;
       button.setAttribute("aria-pressed", String(this.activeColor === color));
-      button.addEventListener("click", () => {
+      this.bindPress(button, () => {
         this.activeColor = color;
         this.renderToolbar();
       });
@@ -626,7 +885,7 @@ class SnapWeaveOverlay {
     LINE_WIDTHS.forEach((lineWidth) => {
       const option = document.createElement("option");
       option.value = String(lineWidth);
-      option.textContent = `${lineWidth}px`;
+      option.textContent = `${lineWidth} 像素`;
       option.selected = this.activeLineWidth === lineWidth;
       select.append(option);
     });
@@ -713,6 +972,7 @@ class SnapWeaveOverlay {
     if (this.stage !== "selection" || !this.selectionRect) {
       this.selectionBox.style.display = "none";
       this.meta.textContent = "";
+      this.positionActions();
       return;
     }
 
@@ -728,20 +988,25 @@ class SnapWeaveOverlay {
     this.selectionBox.style.width = `${width}px`;
     this.selectionBox.style.height = `${height}px`;
     this.meta.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+    this.positionActions();
   }
 
   private updateButtons() {
     const inSelection = this.stage === "selection";
-    this.editSelectionButton.style.display = inSelection ? "inline-flex" : "none";
+    const hasSelection = this.hasMeaningfulSelection();
+    this.editSelectionButton.style.display = inSelection && hasSelection ? "inline-flex" : "none";
     this.undoButton.style.display = inSelection ? "none" : "inline-flex";
     this.redoButton.style.display = inSelection ? "none" : "inline-flex";
-    this.copyButton.style.display = inSelection ? "none" : "inline-flex";
-    this.downloadButton.style.display = inSelection ? "none" : "inline-flex";
+    this.copyButton.style.display = inSelection && !hasSelection ? "none" : "inline-flex";
+    this.downloadButton.style.display = inSelection && !hasSelection ? "none" : "inline-flex";
     this.toolbar.style.display = this.stage === "editor" ? "flex" : "none";
+    this.actions.style.display = inSelection ? (hasSelection ? "flex" : "none") : "flex";
 
     if (!inSelection) {
       this.meta.textContent = `${Math.round(this.imageNaturalWidth)} × ${Math.round(this.imageNaturalHeight)}`;
     }
+
+    this.positionActions();
   }
 
   private async handleExport(copyToClipboard: boolean) {
@@ -755,11 +1020,12 @@ class SnapWeaveOverlay {
       });
 
       if (!response?.ok || !response.dataUrl) {
-        throw new Error(response?.error ?? "Failed to export capture.");
+        throw new Error(response?.error ?? "导出截图失败。");
       }
 
       if (copyToClipboard) {
-        this.showToast("Copied to clipboard.");
+        await this.writeImageToClipboard(response.dataUrl as string);
+        this.showToast("已保存到粘贴板。");
         window.setTimeout(() => this.close(), 320);
         return;
       }
@@ -768,9 +1034,11 @@ class SnapWeaveOverlay {
       link.href = response.dataUrl as string;
       link.download = this.buildFileName();
       link.click();
-      this.showToast("PNG downloaded.");
+      this.showToast("截图已下载。");
+      window.setTimeout(() => this.close(), 320);
     } catch (error) {
-      this.showToast(error instanceof Error ? error.message : "Unable to export capture.");
+      console.error("[SnapWeave] handleExport error", error);
+      this.showToast(error instanceof Error ? error.message : "导出截图失败。");
     }
   }
 
@@ -778,9 +1046,55 @@ class SnapWeaveOverlay {
     const title = document.title
       .toLowerCase()
       .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")
-      .replace(/^-+|-+$/g, "") || "capture";
+      .replace(/^-+|-+$/g, "") || "截图";
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     return `${title}-${timestamp}.png`;
+  }
+
+  private hasMeaningfulSelection() {
+    if (!this.selectionRect) {
+      return false;
+    }
+
+    const rect = this.normalizeRect(this.selectionRect);
+    return rect.width > 3 && rect.height > 3;
+  }
+
+  private positionActions() {
+    if (this.actions.style.display === "none") {
+      return;
+    }
+
+    const menuWidth = this.actions.offsetWidth || 360;
+    const menuHeight = this.actions.offsetHeight || 46;
+    let left = 16;
+    let top = 16;
+
+    if (this.stage === "selection" && this.hasMeaningfulSelection() && this.selectionRect) {
+      const rect = this.normalizeRect(this.selectionRect);
+      const selectionLeft = this.displayRect.left + rect.x * this.displayRect.scale;
+      const selectionTop = this.displayRect.top + rect.y * this.displayRect.scale;
+      const selectionBottom = selectionTop + rect.height * this.displayRect.scale;
+
+      left = selectionLeft;
+      top = selectionBottom + 12;
+
+      if (top + menuHeight > window.innerHeight - 16) {
+        top = selectionTop - menuHeight - 12;
+      }
+    } else {
+      left = this.displayRect.left + this.displayRect.width - menuWidth;
+      top = this.displayRect.top + 12;
+    }
+
+    left = Math.max(16, Math.min(left, window.innerWidth - menuWidth - 16));
+    top = Math.max(16, Math.min(top, window.innerHeight - menuHeight - 16));
+
+    this.actions.style.left = `${left}px`;
+    this.actions.style.top = `${top}px`;
+    this.actions.style.right = "auto";
+    this.actions.style.bottom = "auto";
+    this.actions.style.transform = "none";
   }
 
   private clientToImage(clientX: number, clientY: number) {
@@ -863,7 +1177,7 @@ class SnapWeaveOverlay {
     textarea.style.top = `${clientY}px`;
     textarea.style.color = this.activeColor;
     textarea.style.fontSize = `${Math.max(14, this.activeLineWidth * 6)}px`;
-    textarea.placeholder = "Type text and press Enter";
+    textarea.placeholder = "输入文字后按回车";
 
     const commit = () => {
       const text = textarea.value.trim();
@@ -928,11 +1242,51 @@ class SnapWeaveOverlay {
     void this.renderEditorCanvas();
   }
 
+  private bindPress(element: HTMLElement, handler: () => void) {
+    let handled = false;
+
+    const runHandler = (source: string) => {
+      if (handled) {
+        return;
+      }
+      handled = true;
+      try {
+        handler();
+      } catch (error) {
+        console.error("[SnapWeave] button handler error", source, error);
+      }
+      window.setTimeout(() => {
+        handled = false;
+      }, 0);
+    };
+
+    element.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+
+    element.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+
+    element.addEventListener("pointerup", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      runHandler("pointerup");
+    });
+
+    element.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      runHandler("click");
+    });
+  }
+
   private createButton(label: string, handler: () => void) {
     const button = document.createElement("button");
+    button.type = "button";
     button.className = "sw-button";
     button.textContent = label;
-    button.addEventListener("click", handler);
+    this.bindPress(button, handler);
     return button;
   }
 
@@ -953,6 +1307,10 @@ class SnapWeaveOverlay {
     this.redoStack = [];
     this.draftAnnotation = null;
     this.hideTextEditor();
+    this.actions.style.display = "none";
+    this.toolbar.style.display = "none";
+    this.banner.style.display = "none";
+    this.selectionBox.style.display = "none";
     this.hide();
   }
 
@@ -992,10 +1350,10 @@ if (!window.__snapWeaveBootstrapped) {
           overlay.restorePageState(message.x, message.y);
           return { ok: true };
         case "SCROLL_TO_POSITION":
-          window.scrollTo(message.x, message.y);
+          await overlay.scrollToPosition(message.x, message.y);
           return { ok: true };
         default:
-          throw new Error("Unknown content request.");
+          throw new Error("未知的页面请求。");
       }
     };
 
@@ -1004,7 +1362,7 @@ if (!window.__snapWeaveBootstrapped) {
       .catch((error) => {
         sendResponse({
           ok: false,
-          error: error instanceof Error ? error.message : "Content script error."
+          error: error instanceof Error ? error.message : "页面脚本处理失败。"
         });
       });
 

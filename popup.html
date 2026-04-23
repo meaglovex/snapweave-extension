@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SnapWeave</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        width: 320px;
+        min-height: 320px;
+        background:
+          radial-gradient(circle at top left, rgba(34, 211, 238, 0.25), transparent 38%),
+          linear-gradient(160deg, #eff6ff 0%, #f8fafc 100%);
+        color: #0f172a;
+      }
+
+      .shell {
+        padding: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .brand img {
+        width: 40px;
+        height: 40px;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 18px;
+      }
+
+      .brand p {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: #475569;
+      }
+
+      .mode-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .mode-button {
+        border: 0;
+        border-radius: 16px;
+        padding: 14px;
+        text-align: left;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+        cursor: pointer;
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+      }
+
+      .mode-button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 16px 44px rgba(37, 99, 235, 0.16);
+      }
+
+      .mode-button strong {
+        display: block;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+
+      .mode-button span {
+        font-size: 12px;
+        color: #475569;
+      }
+
+      .footer {
+        margin-top: 16px;
+        font-size: 12px;
+        color: #64748b;
+      }
+
+      .status {
+        margin-top: 12px;
+        min-height: 18px;
+        font-size: 12px;
+        color: #be123c;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="brand">
+        <img src="/icons/icon-48.png" alt="SnapWeave" />
+        <div>
+          <h1>SnapWeave</h1>
+          <p>Capture, mark up, copy, and ship.</p>
+        </div>
+      </section>
+
+      <section class="mode-grid">
+        <button class="mode-button" data-mode="selection">
+          <strong>Region Capture</strong>
+          <span>WeChat-style selection overlay with editing tools.</span>
+        </button>
+        <button class="mode-button" data-mode="visible">
+          <strong>Visible Area</strong>
+          <span>Capture the current viewport and annotate immediately.</span>
+        </button>
+        <button class="mode-button" data-mode="fullPage">
+          <strong>Full Page</strong>
+          <span>Scroll, stitch, and export long pages as one PNG.</span>
+        </button>
+      </section>
+
+      <p class="footer">Shortcut: <code>Ctrl/Command + Shift + S</code></p>
+      <div id="status" class="status" aria-live="polite"></div>
+    </main>
+    <script type="module" src="/src/popup/index.ts"></script>
+  </body>
+</html>

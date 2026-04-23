@@ -1,0 +1,11 @@
+name: Documentation
+description: Track missing or outdated docs.
+title: "[docs] "
+labels: ["docs"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What needs documentation?
+    validations:
+      required: true

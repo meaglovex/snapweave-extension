@@ -1,0 +1,21 @@
+name: Release checklist
+description: Track a release candidate for SnapWeave.
+title: "[release] "
+labels: ["release"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Release scope
+      description: What ships in this version?
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: CI is green
+        - label: Full-page capture was tested manually
+        - label: Clipboard copy was tested manually
+        - label: Release notes are drafted
